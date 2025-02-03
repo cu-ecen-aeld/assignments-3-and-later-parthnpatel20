@@ -43,9 +43,6 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
 
 fi
 
-echo "Adding the Image in outdir"
-
-echo "Creating the staging directory for the root filesystem"
 cd "$OUTDIR"
 if [ -d "${OUTDIR}/rootfs" ]
 then
@@ -72,7 +69,7 @@ else
 fi
 
 # TODO: Make and install busybox
-make                                ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE}
+make  ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE}
 make CONFIG_PREFIX=${OUTDIR}/rootfs ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} install
 
 cd ${OUTDIR}/rootfs
@@ -100,7 +97,7 @@ make clean
 make CROSS_COMPILE=${CROSS_COMPILE} all
 
 # TODO: Copy the finder related scripts and executables to the /home directory
-# on the target rootfs
+
 cp ${FINDER_APP_DIR}/finder-test.sh       ${OUTDIR}/rootfs/home
 cp ${FINDER_APP_DIR}/conf/            -r  ${OUTDIR}/rootfs/home
 cp ${FINDER_APP_DIR}/finder.sh            ${OUTDIR}/rootfs/home
@@ -111,10 +108,10 @@ cp ${FINDER_APP_DIR}/autorun-qemu.sh      ${OUTDIR}/rootfs/home
 cd ${OUTDIR}/rootfs
 sudo chown -R root:root *
 
+
 # TODO: Create initramfs.cpio.gz in OUTDIR folder
 find . | cpio -H newc -ov --owner root:root > ${OUTDIR}/initramfs.cpio
 cd ${OUTDIR}
 gzip -f initramfs.cpio
 
-echo "Adding the Image in outdir"
 cp /tmp/aeld/linux-stable/arch/arm64/boot/Image ${OUTDIR}/
