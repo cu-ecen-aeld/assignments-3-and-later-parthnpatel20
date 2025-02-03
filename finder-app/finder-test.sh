@@ -58,6 +58,8 @@ do
 	./writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
 done
 
+#OUTPUTSTRING=$(./home/test/assignment-1-parthnpatel20/finder-app/finder.sh "$WRITEDIR" "$WRITESTR")
+
 OUTPUTSTRING=$(./finder.sh "$WRITEDIR" "$WRITESTR")
 
 # remove temporary directories
