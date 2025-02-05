@@ -5,7 +5,7 @@ OUTDIR=${1:-/tmp/aeld}  # Using parameter expansion to simplify directory select
 KERNEL_REPO="git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git"
 KERNEL_VERSION="v5.15.163"
 BUSYBOX_VERSION="1_33_1"
-FINDER_APP_DIR="/home/parth/test/assignment-1-parthnpatel20/finder-app"
+FINDER_APP_DIR=$(realpath $(dirname $0))
 ARCH="arm64"
 CROSS_COMPILE="aarch64-none-linux-gnu-"
 
