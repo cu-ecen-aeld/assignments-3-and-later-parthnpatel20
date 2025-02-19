@@ -10,6 +10,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <syslog.h>
+#include <sys/stat.h>
 
 #define PORT 9000
 #define BUFFER_SIZE 1024
@@ -21,7 +22,7 @@ int client_socket = -1; // Global variable for client socket
 // Signal handler for SIGINT and SIGTERM
 void handle_signal(int sig) {
     syslog(LOG_INFO, "Caught signal, exiting");
-    
+
     // Close sockets if open
     if (client_socket != -1) close(client_socket);
     if (server_socket != -1) close(server_socket);
@@ -35,17 +36,77 @@ void handle_signal(int sig) {
     exit(EXIT_SUCCESS);
 }
 
-int main() {
+// Function to daemonize the process
+void daemonize() {
+    pid_t pid, sid;
+
+    // First fork
+    pid = fork();
+    if (pid < 0) {
+        syslog(LOG_ERR, "First fork failed: %s", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    if (pid > 0) {
+        exit(EXIT_SUCCESS); // Parent exits
+    }
+
+    // Create new session
+    sid = setsid();
+    if (sid < 0) {
+        syslog(LOG_ERR, "Failed to create new session: %s", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+
+    // Second fork
+    pid = fork();
+    if (pid < 0) {
+        syslog(LOG_ERR, "Second fork failed: %s", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    if (pid > 0) {
+        exit(EXIT_SUCCESS); // First child exits
+    }
+
+    // Set file permissions
+    umask(0);
+
+    // Change working directory to root
+    if (chdir("/") < 0) {
+        syslog(LOG_ERR, "Failed to change directory to root: %s", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+
+    // Close standard file descriptors
+    close(STDIN_FILENO);
+    close(STDOUT_FILENO);
+    close(STDERR_FILENO);
+
+    // Open /dev/null as stdin, stdout, stderr
+    int devnull = open("/dev/null", O_RDWR);
+    dup2(devnull, STDIN_FILENO);
+    dup2(devnull, STDOUT_FILENO);
+    dup2(devnull, STDERR_FILENO);
+    close(devnull);
+
+    syslog(LOG_INFO, "Daemon initialized successfully and running in background");
+}
+
+int main(int argc, char *argv[]) {
     struct sockaddr_in server_addr, client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
     char buffer[BUFFER_SIZE];
 
+    // Open syslog for logging
+    openlog("aesdsocket", LOG_PID, LOG_USER);
+
+    // Check if running in daemon mode
+    if (argc > 1 && strcmp(argv[1], "-d") == 0) {
+        daemonize();
+    }
+
     // Register signal handlers for SIGINT and SIGTERM
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
-
-    // Open syslog for logging
-    openlog("aesdsocket", LOG_PID, LOG_USER);
 
     // Create socket
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
