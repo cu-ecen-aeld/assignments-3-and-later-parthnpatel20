@@ -16,79 +16,38 @@
 #define BUFFER_SIZE 1024
 #define FILE_PATH "/var/tmp/aesdsocketdata"
 
-int server_socket = -1; // Global variable for server socket
-int client_socket = -1; // Global variable for client socket
+int server_socket = -1;
+int client_socket = -1;
 
-// Signal handler for SIGINT and SIGTERM
 void handle_signal(int sig) {
     syslog(LOG_INFO, "Caught signal, exiting");
-
-    // Close sockets if open
     if (client_socket != -1) close(client_socket);
     if (server_socket != -1) close(server_socket);
-
-    // Remove file
     remove(FILE_PATH);
-
-    // Close syslog
     closelog();
-
     exit(EXIT_SUCCESS);
 }
 
-// Function to daemonize the process
 void daemonize() {
     pid_t pid, sid;
-
-    // First fork
+    
     pid = fork();
-    if (pid < 0) {
-        syslog(LOG_ERR, "First fork failed: %s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    if (pid > 0) {
-        exit(EXIT_SUCCESS); // Parent exits
-    }
+    if (pid < 0) { exit(EXIT_FAILURE); }
+    if (pid > 0) { exit(EXIT_SUCCESS); }
 
-    // Create new session
     sid = setsid();
-    if (sid < 0) {
-        syslog(LOG_ERR, "Failed to create new session: %s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+    if (sid < 0) { exit(EXIT_FAILURE); }
 
-    // Second fork
-    pid = fork();
-    if (pid < 0) {
-        syslog(LOG_ERR, "Second fork failed: %s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    if (pid > 0) {
-        exit(EXIT_SUCCESS); // First child exits
-    }
-
-    // Set file permissions
     umask(0);
+    if (chdir("/") < 0) { exit(EXIT_FAILURE); }
 
-    // Change working directory to root
-    if (chdir("/") < 0) {
-        syslog(LOG_ERR, "Failed to change directory to root: %s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    // Close standard file descriptors
-    close(STDIN_FILENO);
-    close(STDOUT_FILENO);
-    close(STDERR_FILENO);
-
-    // Open /dev/null as stdin, stdout, stderr
     int devnull = open("/dev/null", O_RDWR);
     dup2(devnull, STDIN_FILENO);
     dup2(devnull, STDOUT_FILENO);
     dup2(devnull, STDERR_FILENO);
-    close(devnull);
+    close(devnull);  // Proper cleanup
 
-    syslog(LOG_INFO, "Daemon initialized successfully and running in background");
+    syslog(LOG_INFO, "Daemon initialized successfully");
 }
 
 int main(int argc, char *argv[]) {
@@ -96,39 +55,35 @@ int main(int argc, char *argv[]) {
     socklen_t client_addr_len = sizeof(client_addr);
     char buffer[BUFFER_SIZE];
 
-    // Open syslog for logging
     openlog("aesdsocket", LOG_PID, LOG_USER);
 
-    // Check if running in daemon mode
     if (argc > 1 && strcmp(argv[1], "-d") == 0) {
         daemonize();
     }
 
-    // Register signal handlers for SIGINT and SIGTERM
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
-    // Create socket
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket == -1) {
         syslog(LOG_ERR, "Failed to create socket: %s", strerror(errno));
         return -1;
     }
 
-    // Configure server address struct
+    int optval = 1;
+    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(PORT);
 
-    // Bind socket
     if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
         syslog(LOG_ERR, "Bind failed: %s", strerror(errno));
         close(server_socket);
         return -1;
     }
 
-    // Listen for connections
     if (listen(server_socket, 10) == -1) {
         syslog(LOG_ERR, "Listen failed: %s", strerror(errno));
         close(server_socket);
@@ -138,60 +93,42 @@ int main(int argc, char *argv[]) {
     syslog(LOG_INFO, "Server listening on port %d", PORT);
 
     while (1) {
-        // Accept a client connection
         client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &client_addr_len);
         if (client_socket == -1) {
             syslog(LOG_ERR, "Accept failed: %s", strerror(errno));
             continue;
         }
 
-        // Log accepted connection
         syslog(LOG_INFO, "Accepted connection from %s", inet_ntoa(client_addr.sin_addr));
 
-        // Open the file for appending
-        int file_fd = open(FILE_PATH, O_WRONLY | O_CREAT | O_APPEND, 0666);
-        if (file_fd == -1) {
+        FILE *file = fopen(FILE_PATH, "a+");
+        if (!file) {
             syslog(LOG_ERR, "Failed to open file: %s", strerror(errno));
             close(client_socket);
             continue;
         }
 
-        // Receive data from client
         ssize_t bytes_received;
         while ((bytes_received = recv(client_socket, buffer, BUFFER_SIZE, 0)) > 0) {
-            // Write to file
-            write(file_fd, buffer, bytes_received);
+            fwrite(buffer, 1, bytes_received, file);
+            fflush(file);
 
-            // Check if newline received, then send back full file
             if (memchr(buffer, '\n', bytes_received)) {
-                close(file_fd);
-
-                // Open the file again for reading
-                file_fd = open(FILE_PATH, O_RDONLY);
-                if (file_fd == -1) {
-                    syslog(LOG_ERR, "Failed to open file for reading: %s", strerror(errno));
-                    break;
-                }
-
-                // Read and send file contents back to client
-                while ((bytes_received = read(file_fd, buffer, BUFFER_SIZE)) > 0) {
+                rewind(file);
+                while ((bytes_received = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
                     send(client_socket, buffer, bytes_received, 0);
                 }
-
-                close(file_fd);
                 break;
             }
         }
 
-        // Log closed connection
+        fclose(file);
         syslog(LOG_INFO, "Closed connection from %s", inet_ntoa(client_addr.sin_addr));
 
-        // Close client socket
         close(client_socket);
         client_socket = -1;
     }
 
-    // Close server socket (never reached)
     close(server_socket);
     closelog();
 
