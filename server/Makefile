@@ -1,5 +1,5 @@
 # Set cross-compiler prefix (default to native gcc)
-CROSS_COMPILE ?=
+CROSS_COMPILE ?= aarch64-none-linux-gnu-
 
 # Compiler and flags
 CC := $(CROSS_COMPILE)gcc
