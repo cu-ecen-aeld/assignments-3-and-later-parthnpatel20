@@ -20,7 +20,7 @@ all: $(TARGET)
 
 # Link the final executable
 $(TARGET): $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS)$(LDFLAGS) -o $@ $^
 
 # Compile rule for .o files
 %.o: %.c
