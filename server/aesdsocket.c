@@ -17,7 +17,15 @@
 
 #define PORT 9000
 #define BUFFER_SIZE 1024
-#define FILE_PATH "/var/tmp/aesdsocketdata"
+
+// Enable AESD Char Device Usage
+#define USE_AESD_CHAR_DEVICE 1
+
+#ifdef USE_AESD_CHAR_DEVICE
+    #define FILE_PATH "/dev/aesdchar"
+#else
+    #define FILE_PATH "/var/tmp/aesdsocketdata"
+#endif
 
 int server_socket = -1;
 pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -48,7 +56,11 @@ void handle_signal(int sig) {
 
     // Close server socket and clean up
     if (server_socket != -1) close(server_socket);
+
+#ifndef USE_AESD_CHAR_DEVICE
     remove(FILE_PATH);
+#endif
+
     pthread_mutex_destroy(&file_mutex);
     closelog();
 
@@ -64,8 +76,8 @@ void *client_handler(void *arg) {
 
     syslog(LOG_INFO, "Thread started for client socket: %d", client_socket);
 
-    FILE *file = fopen(FILE_PATH, "a+");
-    if (!file) {
+    int fd = open(FILE_PATH, O_RDWR | O_APPEND | O_CREAT, 0644);
+    if (fd == -1) {
         syslog(LOG_ERR, "Failed to open file");
         close(client_socket);
         free(thread_data);
@@ -74,20 +86,19 @@ void *client_handler(void *arg) {
 
     while ((bytes_received = recv(client_socket, buffer, BUFFER_SIZE, 0)) > 0) {
         pthread_mutex_lock(&file_mutex);
-        fwrite(buffer, 1, bytes_received, file);
-        fflush(file);
+        write(fd, buffer, bytes_received);
         pthread_mutex_unlock(&file_mutex);
 
         if (memchr(buffer, '\n', bytes_received)) {
-            rewind(file);
-            while ((bytes_received = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
+            lseek(fd, 0, SEEK_SET);
+            while ((bytes_received = read(fd, buffer, BUFFER_SIZE)) > 0) {
                 send(client_socket, buffer, bytes_received, 0);
             }
             break;
         }
     }
 
-    fclose(file);
+    close(fd);
     close(client_socket);
     syslog(LOG_INFO, "Thread finished for client socket: %d", client_socket);
 
@@ -116,7 +127,8 @@ void daemonize() {
     syslog(LOG_INFO, "Daemon initialized successfully");
 }
 
-// Thread function to append timestamps every 10 seconds
+// Thread function to append timestamps every 10 seconds (only for /var/tmp/aesdsocketdata)
+#ifndef USE_AESD_CHAR_DEVICE
 void *timestamp_thread(void *arg) {
     while (1) {
         sleep(10);
@@ -126,15 +138,16 @@ void *timestamp_thread(void *arg) {
         strftime(timestamp, sizeof(timestamp), "timestamp: %a, %d %b %Y %H:%M:%S %z\n", t);
 
         pthread_mutex_lock(&file_mutex);
-        FILE *file = fopen(FILE_PATH, "a");
-        if (file) {
-            fputs(timestamp, file);
-            fclose(file);
+        int fd = open(FILE_PATH, O_WRONLY | O_APPEND);
+        if (fd != -1) {
+            write(fd, timestamp, strlen(timestamp));
+            close(fd);
         }
         pthread_mutex_unlock(&file_mutex);
     }
     return NULL;
 }
+#endif
 
 int main(int argc, char *argv[]) {
     struct sockaddr_in server_addr, client_addr;
@@ -179,9 +192,10 @@ int main(int argc, char *argv[]) {
 
     syslog(LOG_INFO, "Server listening on port %d", PORT);
 
-    // Start timestamp thread
+#ifndef USE_AESD_CHAR_DEVICE
     pthread_t time_thread;
     pthread_create(&time_thread, NULL, timestamp_thread, NULL);
+#endif
 
     LIST_INIT(&thread_head);
 
@@ -194,7 +208,6 @@ int main(int argc, char *argv[]) {
 
         syslog(LOG_INFO, "Accepted connection from %s", inet_ntoa(client_addr.sin_addr));
 
-        // Allocate memory for new thread
         client_thread_t *new_thread = malloc(sizeof(client_thread_t));
         if (!new_thread) {
             syslog(LOG_ERR, "Malloc failed");
@@ -212,7 +225,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Cleanup (never reached)
     close(server_socket);
     closelog();
 

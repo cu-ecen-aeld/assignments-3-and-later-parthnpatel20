@@ -2,9 +2,9 @@
 CROSS_COMPILE ?= 
 
 # Compiler and flags
-CC ?= $(CROSS_COMPILE)gcc
-CFLAGS ?= -Wall -Werror -g -pthread
-LDFLAGS ?=
+CC = $(CROSS_COMPILE)gcc
+CFLAGS = -Wall -Werror -g -pthread
+LDFLAGS =
 # Target program name
 TARGET := aesdsocket
 
