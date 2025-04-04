@@ -14,6 +14,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <sys/queue.h>
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 #define PORT 9000
 #define BUFFER_SIZE 1024
@@ -67,46 +68,135 @@ void handle_signal(int sig) {
     exit(EXIT_SUCCESS);
 }
 
-// Thread function to handle client communication
 void *client_handler(void *arg) {
-    client_thread_t *thread_data = (client_thread_t *)arg;
-    int client_socket = thread_data->client_socket;
+    client_thread_t *ct = (client_thread_t *)arg;
+    int client_socket = ct->client_socket;
     char buffer[BUFFER_SIZE];
     ssize_t bytes_received;
 
-    syslog(LOG_INFO, "Thread started for client socket: %d", client_socket);
+    syslog(LOG_INFO, "Client connected: socket=%d", client_socket);
 
+    // Open file descriptor for normal operations.
     int fd = open(FILE_PATH, O_RDWR | O_APPEND | O_CREAT, 0644);
-    if (fd == -1) {
-        syslog(LOG_ERR, "Failed to open file");
+    if (fd < 0) {
+        syslog(LOG_ERR, "Failed to open %s: %s", FILE_PATH, strerror(errno));
         close(client_socket);
-        free(thread_data);
+        free(ct);
         return NULL;
     }
 
-    while ((bytes_received = recv(client_socket, buffer, BUFFER_SIZE, 0)) > 0) {
-        pthread_mutex_lock(&file_mutex);
-        write(fd, buffer, bytes_received);
-        pthread_mutex_unlock(&file_mutex);
+    // accum_buf collects the  received message.
+    char *accum_buf = NULL;
+    size_t accum_size = 0;
 
-        if (memchr(buffer, '\n', bytes_received)) {
-            lseek(fd, 0, SEEK_SET);
-            while ((bytes_received = read(fd, buffer, BUFFER_SIZE)) > 0) {
-                send(client_socket, buffer, bytes_received, 0);
-            }
+    while ((bytes_received = recv(client_socket, buffer, BUFFER_SIZE, 0)) > 0) {
+    
+        // Append received data to accum_buf.
+        char *new_buf = realloc(accum_buf, accum_size + bytes_received + 1);
+        
+        if (!new_buf) {
+            syslog(LOG_ERR, "Memory allocation failed");
             break;
         }
+        
+        accum_buf = new_buf;
+        memcpy(accum_buf + accum_size, buffer, bytes_received);
+        accum_size += bytes_received;
+        accum_buf[accum_size] = '\0';
+
+	syslog(LOG_INFO, "test log");
+        // Check if the accumulated buffer starts with an IOCTL command.
+        if (strncmp(accum_buf, "AESDCHAR_IOCSEEKTO:", strlen("AESDCHAR_IOCSEEKTO:")) == 0) {
+        
+            syslog(LOG_INFO, "ioseektofound: %s", accum_buf);
+            unsigned int cmd = 0, offset = 0;
+            
+            // Use accum_buf directly for parsing.
+            char *parse = accum_buf + strlen("AESDCHAR_IOCSEEKTO:");
+            
+            if (sscanf(parse, "%u,%u", &cmd, &offset) == 2) {
+            
+                // Open a separate FD for IOCTL processing.
+                int ioctl_fd = open(FILE_PATH, O_RDWR);
+                
+                if (ioctl_fd < 0) {
+                    syslog(LOG_ERR, "Failed to open %s for ioctl: %s", FILE_PATH, strerror(errno));
+                    
+                } else {
+                
+                    struct aesd_seekto seek = { .write_cmd = cmd, .write_cmd_offset = offset };
+                    
+                    if (ioctl(ioctl_fd, AESDCHAR_IOCSEEKTO, &seek) == -1) {
+                        syslog(LOG_ERR, "ioctl failed: %s", strerror(errno));
+                        
+                    } else {
+                    
+                        lseek(ioctl_fd, 0, SEEK_CUR);  // match file position
+                        ssize_t r;
+                        
+                        while ((r = read(ioctl_fd, buffer, BUFFER_SIZE)) > 0) {
+                            send(client_socket, buffer, r, 0);
+                        }
+                        
+                        // Restore FD pointer for next writes.
+                        lseek(ioctl_fd, 0, SEEK_END);
+                    }
+                    
+                    close(ioctl_fd);
+                }
+                
+            } else {
+            
+                syslog(LOG_ERR, "Malformed ioctl string: %s", accum_buf);
+            }
+            
+            // Clear the accum_buff so the ioctl string is not written.
+            free(accum_buf);
+            accum_buf = NULL;
+            accum_size = 0;
+            continue;  // Skip normal write path.
+        } 
+
+        
+        // Write the entire accumulated data to the device.
+        pthread_mutex_lock(&file_mutex);
+        
+        if (write(fd, accum_buf, accum_size) < 0) {
+            syslog(LOG_ERR, "Write failed: %s", strerror(errno));
+        }
+        
+        pthread_mutex_unlock(&file_mutex);
+
+        // Echo back the file contents.
+        pthread_mutex_lock(&file_mutex);
+        lseek(fd, 0, SEEK_SET);
+        ssize_t r;
+        
+        while ((r = read(fd, buffer, BUFFER_SIZE)) > 0) {
+            send(client_socket, buffer, r, 0);
+        }
+
+        // Restore the file pointer to the end.
+        lseek(fd, 0, SEEK_END);
+        pthread_mutex_unlock(&file_mutex);
+
+        // Clear the buffer for the next message.
+        free(accum_buf);
+        accum_buf = NULL;
+        accum_size = 0;
+        
     }
 
+    free(accum_buf);
     close(fd);
     close(client_socket);
-    syslog(LOG_INFO, "Thread finished for client socket: %d", client_socket);
-
-    // Remove from list
-    LIST_REMOVE(thread_data, entries);
-    free(thread_data);
+    syslog(LOG_INFO, "Client disconnected: socket=%d", client_socket);
+    LIST_REMOVE(ct, entries);
+    free(ct);
     return NULL;
 }
+
+
 
 // Daemonize function
 void daemonize() {

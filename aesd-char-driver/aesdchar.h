@@ -32,6 +32,8 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_p
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos);
 int aesd_init_module(void);
 void aesd_cleanup_module(void);
+static long aesd_ioctl(struct file *file, unsigned int ioctl_cmd, unsigned long ioctl_arg);
+static loff_t aesd_llseek(struct file *file, loff_t user_offset, int origin);
 
 #endif /* AESD_CHAR_DRIVER_AESDCHAR_H_ */
 
